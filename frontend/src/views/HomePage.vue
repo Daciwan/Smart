@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 
 interface Proposal {
@@ -42,6 +42,12 @@ function statusLabel(s: number) {
   return '未知';
 }
 
+const latestThreeProposals = computed(() => {
+  return [...proposals.value]
+    .sort((a, b) => new Date(b.createTime).getTime() - new Date(a.createTime).getTime())
+    .slice(0, 3);
+});
+
 onMounted(() => {
   loadProposals();
 });
@@ -59,10 +65,10 @@ onMounted(() => {
     <section class="list-section">
       <h2 class="section-title">历史提案</h2>
       <div v-if="loading">加载中...</div>
-      <div v-else-if="!proposals.length" class="empty">当前暂无提案</div>
+      <div v-else-if="!latestThreeProposals.length" class="empty">当前暂无提案</div>
       <div v-else class="list">
         <div
-          v-for="p in proposals"
+          v-for="p in latestThreeProposals"
           :key="p.id"
           class="card"
           role="button"

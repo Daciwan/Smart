@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { ethers } from 'ethers';
 import { useWalletStore } from '../stores/wallet';
@@ -26,6 +26,11 @@ const wallet = useWalletStore();
 
 const proposals = ref<Proposal[]>([]);
 const loading = ref(false);
+const keyword = ref('');
+type CategoryKey = 'all' | 'ongoing' | 'settled' | 'passed' | 'rejected' | 'unsettled';
+const activeCategory = ref<CategoryKey>('all');
+const currentPage = ref(1);
+const PAGE_SIZE = 5;
 
 const showCreate = ref(false);
 const creating = ref(false);
@@ -66,6 +71,50 @@ function statusLabelFor(p: Proposal) {
   if (p.propStatus === 3) return '已驳回';
   return '未知';
 }
+
+const categoryOptions: Array<{ key: CategoryKey; label: string }> = [
+  { key: 'all', label: '全部' },
+  { key: 'ongoing', label: '进行中' },
+  { key: 'settled', label: '已结算' },
+  { key: 'passed', label: '已通过' },
+  { key: 'rejected', label: '已驳回' },
+  { key: 'unsettled', label: '未结算' },
+];
+
+const categoryProposals = computed(() => {
+  return proposals.value.filter((p) => {
+    if (activeCategory.value === 'all') return true;
+    if (activeCategory.value === 'ongoing') return p.propStatus === 0;
+    if (activeCategory.value === 'settled') return p.propStatus === 2 || p.propStatus === 3;
+    if (activeCategory.value === 'passed') return p.propStatus === 2;
+    if (activeCategory.value === 'rejected') return p.propStatus === 3;
+    return p.propStatus === 1; // unsettled
+  });
+});
+
+const filteredProposals = computed(() => {
+  const kw = keyword.value.trim().toLowerCase();
+  return categoryProposals.value.filter((p) => p.propTitle.toLowerCase().includes(kw));
+});
+
+const totalPages = computed(() => Math.max(1, Math.ceil(filteredProposals.value.length / PAGE_SIZE)));
+
+const pagedProposals = computed(() => {
+  const start = (currentPage.value - 1) * PAGE_SIZE;
+  return filteredProposals.value.slice(start, start + PAGE_SIZE);
+});
+
+function prevPage() {
+  if (currentPage.value > 1) currentPage.value -= 1;
+}
+
+function nextPage() {
+  if (currentPage.value < totalPages.value) currentPage.value += 1;
+}
+
+watch([keyword, proposals, activeCategory], () => {
+  currentPage.value = 1;
+});
 
 function goDetail(p: Proposal) {
   router.push(`/proposals/${p.id}`);
@@ -199,11 +248,32 @@ onMounted(() => {
       <button class="btn-primary" type="button" @click="openCreate">发起提案</button>
     </div>
 
+    <div class="toolbar">
+      <div class="category-tabs">
+        <button
+          v-for="c in categoryOptions"
+          :key="c.key"
+          type="button"
+          class="tab-btn"
+          :class="{ active: activeCategory === c.key }"
+          @click="activeCategory = c.key"
+        >
+          {{ c.label }}
+        </button>
+      </div>
+      <input
+        v-model.trim="keyword"
+        class="search-input"
+        type="text"
+        placeholder="按标题搜索（仅当前分类）"
+      />
+    </div>
+
     <div v-if="loading">加载中...</div>
-    <div v-else-if="!proposals.length" class="empty">当前暂无提案</div>
+    <div v-else-if="!filteredProposals.length" class="empty">暂无匹配提案</div>
     <div v-else class="list">
       <div
-        v-for="p in proposals"
+        v-for="p in pagedProposals"
         :key="p.id"
         class="card"
         role="button"
@@ -219,6 +289,15 @@ onMounted(() => {
           <span>截止时间：{{ new Date(p.deadline).toLocaleString() }}</span>
         </div>
       </div>
+    </div>
+    <div v-if="!loading && filteredProposals.length" class="pagination">
+      <button class="btn-secondary" type="button" :disabled="currentPage <= 1" @click="prevPage">
+        上一页
+      </button>
+      <span>第 {{ currentPage }} / {{ totalPages }} 页</span>
+      <button class="btn-secondary" type="button" :disabled="currentPage >= totalPages" @click="nextPage">
+        下一页
+      </button>
     </div>
 
     <!-- 发起提案表单，入口放在提案与投票页 -->
@@ -278,6 +357,45 @@ onMounted(() => {
 .sub {
   font-size: 13px;
   color: #4b5563;
+}
+
+.toolbar {
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.search-input {
+  width: 360px;
+  max-width: 100%;
+  height: 34px;
+  border-radius: 8px;
+  border: 1px solid #d1d5db;
+  padding: 0 10px;
+  font-size: 13px;
+}
+
+.category-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tab-btn {
+  border: 1px solid #d1d5db;
+  background: #fff;
+  color: #374151;
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.tab-btn.active {
+  border-color: #1f6feb;
+  background: #1f6feb;
+  color: #fff;
 }
 
 .btn-primary,
@@ -360,6 +478,16 @@ onMounted(() => {
 .empty {
   font-size: 14px;
   color: #6b7280;
+}
+
+.pagination {
+  margin-top: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-size: 13px;
+  color: #374151;
 }
 
 .modal-backdrop {

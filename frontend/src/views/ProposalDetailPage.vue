@@ -18,6 +18,7 @@ const contractRef = ref<any | null>(null);
 const CONTRACT_ADDRESS = GOVERNOR_CONTRACT_ADDRESS;
 const CONTRACT_ABI = [
   'function getProposal(uint256 proposalId) view returns (tuple(uint256 id, bytes32 contentHash, address creator, uint8 propType, uint64 startTime, uint64 deadline, uint256 yesVotes, uint256 noVotes, uint256 abstainVotes, uint8 status, bool tallied))',
+  'function whitelist(address voter) view returns (bool isAuth, uint256 weight)',
   'function vote(uint256 proposalId, uint8 choice)',
   'function resolve(uint256 proposalId)',
   'event ProposalResolved(uint256 indexed proposalId, uint8 status, uint256 yesVotes, uint256 noVotes, uint256 abstainVotes)',
@@ -31,11 +32,17 @@ function explainChainError(err: any, fallback: string): string {
   if (msg.includes('could not coalesce error') || msg.includes('failed to fetch')) {
     return '链上请求失败：请确认 Ganache 正在运行，且 MetaMask 已切换到本地链（127.0.0.1:8545）。';
   }
+  if (msg.includes('not in whitelist')) {
+    return '当前钱包不在白名单，无法投票。';
+  }
   if (msg.includes('user rejected') || msg.includes('rejected')) {
     return '你已在钱包中取消本次交易。';
   }
-  if (msg.includes('cannot resolve yet') || msg.includes('voting closed') || msg.includes('missing revert data')) {
+  if (msg.includes('cannot resolve yet') || msg.includes('voting closed')) {
     return '当前提案暂不满足结算条件，或已被其他人结算，请刷新后重试。';
+  }
+  if (msg.includes('missing revert data')) {
+    return fallback;
   }
   if (msg.includes('insufficient funds')) {
     return '钱包余额不足，无法支付 Gas。';
@@ -180,6 +187,13 @@ async function doVote(choice: number) {
     const provider = new ethers.BrowserProvider(window.ethereum);
     const signer = await provider.getSigner();
     const contract: any = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
+    const signerAddr = await signer.getAddress();
+    const voter = await contract.whitelist(signerAddr);
+    const isAuth = Boolean(voter?.isAuth ?? voter?.[0]);
+    if (!isAuth) {
+      alert('当前钱包不在白名单，无法投票。');
+      return;
+    }
     const tx = await contract.vote(proposal.value.propId || proposal.value.id, choice);
     alert('交易已发送，等待确认：' + tx.hash);
 
