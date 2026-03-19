@@ -1,0 +1,5 @@
+export const RPC_HTTP_URL = 'http://127.0.0.1:8545';
+
+
+export const GOVERNOR_CONTRACT_ADDRESS = '0x97408C0Fa7232241C0F769eaDA4a8235F2a132da';
+
