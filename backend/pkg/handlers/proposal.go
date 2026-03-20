@@ -1,13 +1,20 @@
 package handlers
 
 import (
+	"encoding/json"
+	"fmt"
+	"math/rand"
+	"mime/multipart"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm/clause"
 
 	"smart-community/pkg/db"
 	"smart-community/pkg/models"
@@ -23,10 +30,15 @@ type CreateProposalRequest struct {
 	TxHash     string `json:"txHash"`  // 提案创建交易哈希
 }
 
+type ProposalResponse struct {
+	models.Proposal
+	ImagePaths []string `json:"imagePaths"`
+}
+
 // CreateProposal 发起社区提案 (链下部分：存储文本并生成 ContentHash)
 func CreateProposal(c *gin.Context) {
-	var req CreateProposalRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	req, files, err := bindCreateProposalRequest(c)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -63,9 +75,30 @@ func CreateProposal(c *gin.Context) {
 		return
 	}
 
+	imagePaths, err := saveProposalImages(prop.PropID, files)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save proposal images: " + err.Error()})
+		return
+	}
+
+	if len(imagePaths) > 0 {
+		pathsJSON, _ := json.Marshal(imagePaths)
+		img := models.ProposalImage{
+			PropID:     prop.PropID,
+			ImagePaths: string(pathsJSON),
+		}
+		if err := db.DB.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "prop_id"}},
+			DoUpdates: clause.AssignmentColumns([]string{"image_paths", "update_time"}),
+		}).Create(&img).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save proposal image paths: " + err.Error()})
+			return
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"message":      "提案已创建（链下部分），请在前端调用合约完成上链",
-		"proposal":     prop,
+		"proposal":     ProposalResponse{Proposal: prop, ImagePaths: imagePaths},
 		"contentHash":  contentHash,
 	})
 }
@@ -88,7 +121,12 @@ func ListProposals(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, props)
+	resp, err := buildProposalResponses(props)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to build proposal response: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // GetProposalDetail 提案详情浏览（链下部分）
@@ -101,7 +139,12 @@ func GetProposalDetail(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, prop)
+	resp, err := buildProposalResponses([]models.Proposal{prop})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to build proposal detail: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, resp[0])
 }
 
 type RecordVoteRequest struct {
@@ -152,5 +195,121 @@ func ListVotesByProposal(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, records)
+}
+
+func bindCreateProposalRequest(c *gin.Context) (CreateProposalRequest, []*multipart.FileHeader, error) {
+	contentType := c.ContentType()
+	if strings.Contains(contentType, "multipart/form-data") {
+		req := CreateProposalRequest{
+			PropTitle:   strings.TrimSpace(c.PostForm("propTitle")),
+			PropDesc:    strings.TrimSpace(c.PostForm("propDesc")),
+			Deadline:    strings.TrimSpace(c.PostForm("deadline")),
+			CreatorAddr: strings.TrimSpace(c.PostForm("creatorAddr")),
+			TxHash:      strings.TrimSpace(c.PostForm("txHash")),
+		}
+		propType, _ := strconv.Atoi(strings.TrimSpace(c.PostForm("propType")))
+		req.PropType = propType
+		propID, _ := strconv.Atoi(strings.TrimSpace(c.PostForm("propId")))
+		if propID > 0 {
+			req.PropID = uint(propID)
+		}
+
+		if req.PropTitle == "" || req.PropDesc == "" || req.Deadline == "" || req.CreatorAddr == "" {
+			return CreateProposalRequest{}, nil, fmt.Errorf("missing required fields")
+		}
+		if len(req.PropTitle) < 4 || len(req.PropTitle) > 50 {
+			return CreateProposalRequest{}, nil, fmt.Errorf("propTitle length must be 4-50")
+		}
+		if req.PropType != 0 && req.PropType != 1 {
+			return CreateProposalRequest{}, nil, fmt.Errorf("propType must be 0 or 1")
+		}
+
+		var files []*multipart.FileHeader
+		form, err := c.MultipartForm()
+		if err == nil && form != nil {
+			files = form.File["images"]
+		}
+		return req, files, nil
+	}
+
+	var req CreateProposalRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		return CreateProposalRequest{}, nil, err
+	}
+	return req, nil, nil
+}
+
+func saveProposalImages(propID uint, files []*multipart.FileHeader) ([]string, error) {
+	if len(files) == 0 {
+		return []string{}, nil
+	}
+	dir := filepath.Join("backend", "resources", "proposals", strconv.Itoa(int(propID)))
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, err
+	}
+
+	rand.Seed(time.Now().UnixNano())
+	out := make([]string, 0, len(files))
+	for _, f := range files {
+		if f == nil {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(f.Filename))
+		if ext == "" {
+			ext = ".jpg"
+		}
+		filename := fmt.Sprintf("%d_%06d%s", time.Now().UnixNano(), rand.Intn(1000000), ext)
+		dst := filepath.Join(dir, filename)
+		if err := saveMultipartFile(f, dst); err != nil {
+			return nil, err
+		}
+		out = append(out, "/resources/proposals/"+strconv.Itoa(int(propID))+"/"+filename)
+	}
+	return out, nil
+}
+
+func saveMultipartFile(file *multipart.FileHeader, dst string) error {
+	src, err := file.Open()
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = out.ReadFrom(src)
+	return err
+}
+
+func buildProposalResponses(props []models.Proposal) ([]ProposalResponse, error) {
+	if len(props) == 0 {
+		return []ProposalResponse{}, nil
+	}
+	ids := make([]uint, 0, len(props))
+	for _, p := range props {
+		ids = append(ids, p.PropID)
+	}
+
+	var imgs []models.ProposalImage
+	if err := db.DB.Where("prop_id IN ?", ids).Find(&imgs).Error; err != nil {
+		return nil, err
+	}
+	pathMap := map[uint][]string{}
+	for _, it := range imgs {
+		var arr []string
+		_ = json.Unmarshal([]byte(it.ImagePaths), &arr)
+		pathMap[it.PropID] = arr
+	}
+
+	out := make([]ProposalResponse, 0, len(props))
+	for _, p := range props {
+		out = append(out, ProposalResponse{
+			Proposal:   p,
+			ImagePaths: pathMap[p.PropID],
+		})
+	}
+	return out, nil
 }
 

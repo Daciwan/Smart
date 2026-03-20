@@ -68,6 +68,7 @@ func Init() error {
 	if err := db.AutoMigrate(
 		&models.User{},
 		&models.Proposal{},
+		&models.ProposalImage{},
 		&models.VoteRecord{},
 		&models.SysConfig{},
 	); err != nil {

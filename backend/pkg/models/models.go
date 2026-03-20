@@ -34,6 +34,14 @@ type Proposal struct {
 	TxHash      string    `gorm:"type:char(66)" json:"txHash"`
 }
 
+// ProposalImage 提案图片路径（按提案编号聚合保存为 JSON 数组）
+// 说明：按需求将提案编号作为主键。
+type ProposalImage struct {
+	PropID     uint      `gorm:"primaryKey" json:"propId"`
+	ImagePaths string    `gorm:"type:text;not null" json:"imagePaths"` // JSON array, e.g. ["/resources/a.jpg","/resources/b.jpg"]
+	UpdateTime time.Time `gorm:"autoUpdateTime" json:"updateTime"`
+}
+
 // VoteRecord 对应 DS-3 VoteRecord
 type VoteRecord struct {
 	ID         uint      `gorm:"primaryKey" json:"id"`

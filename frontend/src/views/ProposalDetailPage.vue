@@ -4,11 +4,17 @@ import { useRoute } from 'vue-router';
 import { useWalletStore } from '../stores/wallet';
 import { ethers } from 'ethers';
 import { GOVERNOR_CONTRACT_ADDRESS } from '../config';
+import { explainChainError, formatProposalDeadline, proposalStatusLabel } from '../utils/proposal';
 
 const route = useRoute();
 const wallet = useWalletStore();
+const BACKEND_BASE = 'http://127.0.0.1:8080';
 
 const proposal = ref<any | null>(null);
+const proposalImageUrls = computed(() => {
+  const arr: string[] = Array.isArray(proposal.value?.imagePaths) ? proposal.value.imagePaths : [];
+  return arr.map((p) => (p.startsWith('http') ? p : `${BACKEND_BASE}${p}`));
+});
 const loading = ref(false);
 const voting = ref(false);
 const onchainInfo = ref<any | null>(null);
@@ -25,30 +31,6 @@ const CONTRACT_ABI = [
 ];
 
 const id = computed(() => Number(route.params.id));
-
-function explainChainError(err: any, fallback: string): string {
-  const msg = String(err?.shortMessage || err?.message || '').toLowerCase();
-
-  if (msg.includes('could not coalesce error') || msg.includes('failed to fetch')) {
-    return '链上请求失败：请确认 Ganache 正在运行，且 MetaMask 已切换到本地链（127.0.0.1:8545）。';
-  }
-  if (msg.includes('not in whitelist')) {
-    return '当前钱包不在白名单，无法投票。';
-  }
-  if (msg.includes('user rejected') || msg.includes('rejected')) {
-    return '你已在钱包中取消本次交易。';
-  }
-  if (msg.includes('cannot resolve yet') || msg.includes('voting closed')) {
-    return '当前提案暂不满足结算条件，或已被其他人结算，请刷新后重试。';
-  }
-  if (msg.includes('missing revert data')) {
-    return fallback;
-  }
-  if (msg.includes('insufficient funds')) {
-    return '钱包余额不足，无法支付 Gas。';
-  }
-  return fallback;
-}
 
 async function loadProposal() {
   loading.value = true;
@@ -236,26 +218,19 @@ onUnmounted(() => {
   <div class="page" v-if="proposal">
     <div class="header">
       <h2>{{ proposal.propTitle }}</h2>
-      <span class="status" :data-status="proposal.propStatus">
-        {{
-          proposal.propStatus === 0
-            ? '进行中'
-            : proposal.propStatus === 1
-              ? '已截至但未结算'
-              : proposal.propStatus === 2
-                ? '已通过'
-                : '已驳回'
-        }}
-      </span>
+      <span class="status" :data-status="proposal.propStatus">{{ proposalStatusLabel(proposal.propStatus) }}</span>
     </div>
     <div class="meta">
       <span>发起人：{{ proposal.creatorAddr?.slice(0, 6) }}...{{ proposal.creatorAddr?.slice(-4) }}</span>
-      <span>截止时间：{{ new Date(proposal.deadline).toLocaleString() }}</span>
+      <span>截止时间：{{ formatProposalDeadline(proposal.deadline) }}</span>
     </div>
 
     <section class="section">
       <h3>提案详情</h3>
       <p class="desc">{{ proposal.propDesc }}</p>
+      <div v-if="proposalImageUrls.length" class="images">
+        <img v-for="(src, idx) in proposalImageUrls" :key="idx" :src="src" alt="提案图片" class="proposal-image" />
+      </div>
     </section>
 
     <section class="section">
@@ -374,6 +349,29 @@ onUnmounted(() => {
   font-size: 14px;
   color: #374151;
   white-space: pre-wrap;
+}
+
+.images {
+  margin-top: 10px;
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.proposal-image {
+  width: 100%;
+  height: 240px;
+  object-fit: contain;
+  background: transparent;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+}
+
+@media (max-width: 768px) {
+  .images {
+    grid-template-columns: 1fr;
+  }
 }
 
 .btn-group {

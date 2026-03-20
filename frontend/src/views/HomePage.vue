@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
+import { formatProposalDeadline, proposalStatusLabel } from '../utils/proposal';
 
 interface Proposal {
   id: number;
@@ -32,14 +33,6 @@ async function loadProposals() {
 
 function goDetail(p: Proposal) {
   router.push(`/proposals/${p.id}`);
-}
-
-function statusLabel(s: number) {
-  if (s === 0) return '进行中';
-  if (s === 1) return '已截至但未结算';
-  if (s === 2) return '已通过';
-  if (s === 3) return '已驳回';
-  return '未知';
 }
 
 const latestThreeProposals = computed(() => {
@@ -77,11 +70,11 @@ onMounted(() => {
         >
           <div class="title-row">
             <h3>{{ p.propTitle }}</h3>
-            <span class="status" :data-status="p.propStatus">{{ statusLabel(p.propStatus) }}</span>
+            <span class="status" :data-status="p.propStatus">{{ proposalStatusLabel(p.propStatus) }}</span>
           </div>
           <div class="meta">
             <span>发起人：{{ p.creatorAddr?.slice(0, 6) }}...{{ p.creatorAddr?.slice(-4) }}</span>
-            <span>截止时间：{{ new Date(p.deadline).toLocaleString() }}</span>
+            <span>截止时间：{{ formatProposalDeadline(p.deadline) }}</span>
           </div>
         </div>
       </div>

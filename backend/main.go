@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/gin-contrib/cors"
@@ -40,6 +41,10 @@ func main() {
 	jobs.StartSettlementStatusPoll(context.Background(), 30*time.Second)
 
 	engine := gin.Default()
+
+	// 提案图片静态资源目录：backend/resources
+	_ = os.MkdirAll("backend/resources", 0755)
+	engine.Static("/resources", "backend/resources")
 
 	// CORS：允许前端本地开发访问，并正确处理预检 OPTIONS（避免 404）
 	engine.Use(cors.New(cors.Config{

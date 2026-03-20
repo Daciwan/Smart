@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router';
 import { ethers } from 'ethers';
 import { useWalletStore } from '../stores/wallet';
 import { GOVERNOR_CONTRACT_ADDRESS } from '../config';
+import { formatProposalDeadline, parseDateTimeLocalToPayload, proposalStatusLabel } from '../utils/proposal';
 
 interface Proposal {
   id: number;
@@ -12,6 +13,7 @@ interface Proposal {
   createTime: string;
   deadline: string;
   propStatus: number;
+  imagePaths?: string[];
 }
 
 // 与详情页保持一致的合约地址和 ABI
@@ -41,6 +43,7 @@ const form = ref({
   mode: '0', // 0: 一人一票, 1: 面积加权
   deadline: '',
 });
+const imageFiles = ref<File[]>([]);
 
 async function loadProposals() {
   if (loading.value) return;
@@ -57,19 +60,6 @@ async function loadProposals() {
   } finally {
     loading.value = false;
   }
-}
-
-function statusLabelFor(p: Proposal) {
-  // propStatus 语义（与后端保持一致）：
-  // 0：进行中
-  // 1：已截至但未结算
-  // 2：已通过
-  // 3：已驳回
-  if (p.propStatus === 0) return '进行中';
-  if (p.propStatus === 1) return '已截至但未结算';
-  if (p.propStatus === 2) return '已通过';
-  if (p.propStatus === 3) return '已驳回';
-  return '未知';
 }
 
 const categoryOptions: Array<{ key: CategoryKey; label: string }> = [
@@ -132,29 +122,13 @@ function openCreate() {
 function closeCreate() {
   showCreate.value = false;
   createError.value = null;
+  imageFiles.value = [];
 }
 
-function parseDateTimeLocal(localValue: string): {
-  text: string; // YYYY-MM-DD HH:mm:ss（用于后端存 MySQL）
-  unixSeconds: number; // 用于合约
-} {
-  // datetime-local 的值形如 "2026-03-02T18:30"（不带时区）
-  // 不能直接 new Date(string)（不同浏览器/环境可能按 UTC 解析导致日期偏移）
-  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(localValue);
-  if (!m) {
-    return { text: '', unixSeconds: 0 };
-  }
-  const [, yy, mm, dd, hh, mi] = m;
-  const y = Number(yy);
-  const mon = Number(mm);
-  const day = Number(dd);
-  const hour = Number(hh);
-  const minute = Number(mi);
-  const d = new Date(y, mon - 1, day, hour, minute, 0); // 按本地时区构造
-  return {
-    text: `${yy}-${mm}-${dd} ${hh}:${mi}:00`,
-    unixSeconds: Math.floor(d.getTime() / 1000),
-  };
+function onSelectImages(e: Event) {
+  const target = e.target as HTMLInputElement;
+  const files = target.files ? Array.from(target.files) : [];
+  imageFiles.value = files;
 }
 
 async function submitCreate() {
@@ -187,7 +161,7 @@ async function submitCreate() {
 
     const contentHash = ethers.keccak256(ethers.toUtf8Bytes(desc));
     const propType = parseInt(form.value.mode, 10);
-    const parsed = parseDateTimeLocal(form.value.deadline);
+    const parsed = parseDateTimeLocalToPayload(form.value.deadline);
     if (!parsed.text || !parsed.unixSeconds) {
       createError.value = '投票截止时间格式不正确';
       return;
@@ -203,18 +177,21 @@ async function submitCreate() {
     const onchainId = Number(count);
 
     // 2. 再把提案的链下内容写入后端，并带上 propId 与 txHash
+    const body = new FormData();
+    body.append('propTitle', title);
+    body.append('propDesc', desc);
+    body.append('propType', String(propType));
+    body.append('deadline', parsed.text);
+    body.append('creatorAddr', wallet.address);
+    body.append('propId', String(onchainId));
+    body.append('txHash', tx.hash);
+    for (const f of imageFiles.value) {
+      body.append('images', f);
+    }
+
     const resp = await fetch('http://127.0.0.1:8080/api/proposals', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        propTitle: title,
-        propDesc: desc,
-        propType,
-        deadline: parsed.text,
-        creatorAddr: wallet.address,
-        propId: onchainId,
-        txHash: tx.hash,
-      }),
+      body,
     });
     const data = await resp.json();
     if (!resp.ok) {
@@ -224,6 +201,7 @@ async function submitCreate() {
     alert('提案已成功创建：链上 + 链下均已记录');
     showCreate.value = false;
     form.value = { title: '', desc: '', mode: '0', deadline: '' };
+    imageFiles.value = [];
     await loadProposals();
   } catch (err: any) {
     console.error(err);
@@ -282,11 +260,11 @@ onMounted(() => {
       >
         <div class="title-row">
           <h3>{{ p.propTitle }}</h3>
-          <span class="status" :data-status="p.propStatus">{{ statusLabelFor(p) }}</span>
+          <span class="status" :data-status="p.propStatus">{{ proposalStatusLabel(p.propStatus) }}</span>
         </div>
         <div class="meta">
           <span>发起人：{{ p.creatorAddr?.slice(0, 6) }}...{{ p.creatorAddr?.slice(-4) }}</span>
-          <span>截止时间：{{ new Date(p.deadline).toLocaleString() }}</span>
+          <span>截止时间：{{ formatProposalDeadline(p.deadline) }}</span>
         </div>
       </div>
     </div>
@@ -326,6 +304,11 @@ onMounted(() => {
             <label>投票截止时间</label>
             <input v-model="form.deadline" type="datetime-local" />
           </div>
+        </div>
+        <div class="field">
+          <label>提案图片（可选，支持多张）</label>
+          <input type="file" accept="image/*" multiple @change="onSelectImages" />
+          <small class="hint">图片将上传到后端 resources 目录</small>
         </div>
 
         <div v-if="createError" class="error">{{ createError }}</div>
