@@ -219,11 +219,14 @@ onMounted(() => {
 <template>
   <div class="page">
     <div class="header">
-      <div>
+      <div class="header-text">
         <h2>社区提案与投票</h2>
-        <span class="sub">查看所有已公示的提案及其状态</span>
+        <span class="sub">浏览、搜索并参与社区治理的各项决策</span>
       </div>
-      <button class="btn-primary" type="button" @click="openCreate">发起提案</button>
+      <button class="btn-primary" type="button" @click="openCreate">
+        <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+        发起提案
+      </button>
     </div>
 
     <div class="toolbar">
@@ -239,16 +242,27 @@ onMounted(() => {
           {{ c.label }}
         </button>
       </div>
-      <input
-        v-model.trim="keyword"
-        class="search-input"
-        type="text"
-        placeholder="按标题搜索（仅当前分类）"
-      />
+      <div class="search-wrapper">
+        <svg class="search-icon" viewBox="0 0 24 24" width="16" height="16" stroke="#94a3b8" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+        <input
+          v-model.trim="keyword"
+          class="search-input"
+          type="text"
+          placeholder="搜索提案标题..."
+        />
+      </div>
     </div>
 
-    <div v-if="loading">加载中...</div>
-    <div v-else-if="!filteredProposals.length" class="empty">暂无匹配提案</div>
+    <div v-if="loading" class="state-container">
+      <div class="spinner"></div>
+      <span>加载提案数据中...</span>
+    </div>
+    
+    <div v-else-if="!filteredProposals.length" class="state-container empty">
+      <svg viewBox="0 0 24 24" width="48" height="48" stroke="#cbd5e1" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="9" y1="21" x2="9" y2="9"></line></svg>
+      <p>暂无匹配的提案，换个关键词或分类试试吧</p>
+    </div>
+
     <div v-else class="list">
       <div
         v-for="p in pagedProposals"
@@ -260,281 +274,547 @@ onMounted(() => {
       >
         <div class="title-row">
           <h3>{{ p.propTitle }}</h3>
-          <span class="status" :data-status="p.propStatus">{{ proposalStatusLabel(p.propStatus) }}</span>
+          <span class="status" :data-status="p.propStatus">
+            <span class="status-dot"></span>
+            {{ proposalStatusLabel(p.propStatus) }}
+          </span>
         </div>
-        <div class="meta">
-          <span>发起人：{{ p.creatorAddr?.slice(0, 6) }}...{{ p.creatorAddr?.slice(-4) }}</span>
-          <span>截止时间：{{ formatProposalDeadline(p.deadline) }}</span>
+        <div class="meta-data">
+          <div class="meta-item">
+            <span class="meta-label">发起人</span>
+            <span class="meta-value">{{ p.creatorAddr?.slice(0, 6) }}...{{ p.creatorAddr?.slice(-4) }}</span>
+          </div>
+          <div class="meta-item">
+            <span class="meta-label">截止时间</span>
+            <span class="meta-value time">{{ formatProposalDeadline(p.deadline) }}</span>
+          </div>
         </div>
       </div>
     </div>
+
     <div v-if="!loading && filteredProposals.length" class="pagination">
-      <button class="btn-secondary" type="button" :disabled="currentPage <= 1" @click="prevPage">
-        上一页
-      </button>
-      <span>第 {{ currentPage }} / {{ totalPages }} 页</span>
-      <button class="btn-secondary" type="button" :disabled="currentPage >= totalPages" @click="nextPage">
-        下一页
-      </button>
+      <button class="page-btn" type="button" :disabled="currentPage <= 1" @click="prevPage">上一页</button>
+      <span class="page-info">第 <strong>{{ currentPage }}</strong> / {{ totalPages }} 页</span>
+      <button class="page-btn" type="button" :disabled="currentPage >= totalPages" @click="nextPage">下一页</button>
     </div>
 
-    <!-- 发起提案表单，入口放在提案与投票页 -->
-    <div v-if="showCreate" class="modal-backdrop">
-      <div class="modal">
-        <h3>发起新提案</h3>
-        <p class="hint">该表单负责链下提案内容记录，上链与投票由合约控制。</p>
-
-        <div class="field">
-          <label>提案标题</label>
-          <input v-model="form.title" maxlength="50" />
-        </div>
-        <div class="field">
-          <label>提案详情</label>
-          <textarea v-model="form.desc" rows="4" maxlength="2000" />
-        </div>
-        <div class="field-row">
-          <div class="field">
-            <label>计票模式</label>
-            <select v-model="form.mode">
-              <option value="0">一人一票</option>
-              <option value="1">面积加权</option>
-            </select>
+    <transition name="fade">
+      <div v-if="showCreate" class="modal-backdrop">
+        <div class="modal">
+          <div class="modal-header">
+            <h3>发起新提案</h3>
+            <button class="close-btn" @click="closeCreate">&times;</button>
           </div>
-          <div class="field">
-            <label>投票截止时间</label>
-            <input v-model="form.deadline" type="datetime-local" />
+          <p class="hint">该表单负责链下详情记录，核心逻辑上链并由智能合约控制。</p>
+
+          <div class="form-content">
+            <div class="field">
+              <label>提案标题 <span class="required">*</span></label>
+              <input v-model="form.title" maxlength="50" placeholder="请输入简明扼要的标题 (4-50字符)" />
+            </div>
+            <div class="field">
+              <label>提案详情 <span class="required">*</span></label>
+              <textarea v-model="form.desc" rows="4" maxlength="2000" placeholder="详细描述该提案的背景、目的及实施方案..." />
+            </div>
+            <div class="field-row">
+              <div class="field">
+                <label>计票模式 <span class="required">*</span></label>
+                <div class="select-wrapper">
+                  <select v-model="form.mode">
+                    <option value="0">一人一票</option>
+                    <option value="1">面积加权</option>
+                  </select>
+                </div>
+              </div>
+              <div class="field">
+                <label>投票截止时间 <span class="required">*</span></label>
+                <input v-model="form.deadline" type="datetime-local" />
+              </div>
+            </div>
+            <div class="field">
+              <label>附加图片 (可选)</label>
+              <div class="file-upload">
+                <input type="file" accept="image/*" multiple @change="onSelectImages" class="file-input" />
+                <div class="file-placeholder">
+                  <span v-if="imageFiles.length === 0">点击选择或拖拽图片到此处</span>
+                  <span v-else class="file-selected">已选择 {{ imageFiles.length }} 张图片</span>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="createError" class="error-msg">
+              <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+              {{ createError }}
+            </div>
           </div>
-        </div>
-        <div class="field">
-          <label>提案图片（可选，支持多张）</label>
-          <input type="file" accept="image/*" multiple @change="onSelectImages" />
-          <small class="hint">图片将上传到后端 resources 目录</small>
-        </div>
 
-        <div v-if="createError" class="error">{{ createError }}</div>
-
-        <div class="actions">
-          <button type="button" class="btn-secondary" @click="closeCreate">取消</button>
-          <button type="button" class="btn-primary" :disabled="creating" @click="submitCreate">
-            {{ creating ? '创建中...' : '提交提案' }}
-          </button>
+          <div class="actions">
+            <button type="button" class="btn-ghost" @click="closeCreate">取消</button>
+            <button type="button" class="btn-primary submit-btn" :disabled="creating" @click="submitCreate">
+              <span v-if="creating" class="spinner-small"></span>
+              {{ creating ? '上链确认中...' : '提交上链' }}
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+    </transition>
   </div>
 </template>
 
 <style scoped>
 .page {
-  max-width: 960px;
-  margin: 0 auto;
+  animation: fadeIn 0.4s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .header {
-  margin-bottom: 16px;
+  margin-bottom: 24px;
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-end;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.header-text h2 {
+  font-size: 28px;
+  font-weight: 800;
+  color: #0f172a;
+  margin: 0 0 8px 0;
+  letter-spacing: -0.5px;
 }
 
 .sub {
-  font-size: 13px;
-  color: #4b5563;
+  font-size: 14px;
+  color: #64748b;
 }
 
 .toolbar {
-  margin-bottom: 12px;
+  margin-bottom: 24px;
   display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.search-input {
-  width: 360px;
-  max-width: 100%;
-  height: 34px;
-  border-radius: 8px;
-  border: 1px solid #d1d5db;
-  padding: 0 10px;
-  font-size: 13px;
-}
-
-.category-tabs {
-  display: flex;
-  gap: 8px;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
   flex-wrap: wrap;
 }
 
-.tab-btn {
-  border: 1px solid #d1d5db;
-  background: #fff;
-  color: #374151;
+.category-tabs {
+  display: inline-flex;
+  background: #f1f5f9;
+  padding: 4px;
   border-radius: 999px;
-  padding: 4px 12px;
-  font-size: 13px;
+  gap: 4px;
+}
+
+.tab-btn {
+  border: none;
+  background: transparent;
+  color: #64748b;
+  border-radius: 999px;
+  padding: 6px 16px;
+  font-size: 14px;
+  font-weight: 500;
   cursor: pointer;
+  transition: all 0.2s;
+}
+
+.tab-btn:hover {
+  color: #0f172a;
 }
 
 .tab-btn.active {
-  border-color: #1f6feb;
-  background: #1f6feb;
-  color: #fff;
+  background: #ffffff;
+  color: #2563eb;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  font-weight: 600;
 }
 
-.btn-primary,
-.btn-secondary {
+.search-wrapper {
+  position: relative;
+  flex: 1;
+  max-width: 360px;
+}
+
+.search-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.search-input {
+  width: 100%;
+  height: 40px;
   border-radius: 999px;
-  padding: 6px 14px;
-  font-size: 13px;
-  cursor: pointer;
-  border: none;
+  border: 1px solid #e2e8f0;
+  padding: 0 16px 0 36px;
+  font-size: 14px;
+  transition: all 0.2s;
+  background: #ffffff;
+}
+
+.search-input:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
 }
 
 .btn-primary {
-  background-color: #1f6feb;
-  color: #fff;
-}
-
-.btn-secondary {
-  background-color: #e5ecff;
-  color: #1f3b8a;
-}
-
-.list {
   display: flex;
-  flex-direction: column;
-  gap: 10px;
+  align-items: center;
+  gap: 6px;
+  background-color: #2563eb;
+  color: #fff;
+  border: none;
+  border-radius: 999px;
+  padding: 10px 20px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  box-shadow: 0 4px 6px -1px rgba(37, 99, 235, 0.2);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background-color: #1d4ed8;
+  transform: translateY(-1px);
+}
+
+.btn-primary:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+/* 列表卡片样式 */
+.list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 20px;
 }
 
 .card {
-  background: #fff;
-  border-radius: 12px;
-  padding: 14px 16px;
-  box-shadow: 0 1px 4px rgba(148, 163, 184, 0.3);
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  padding: 24px;
+  transition: all 0.3s ease;
   cursor: pointer;
 }
 
 .card:hover {
-  box-shadow: 0 4px 12px rgba(148, 163, 184, 0.45);
+  transform: translateY(-4px);
+  box-shadow: 0 12px 24px -8px rgba(15, 23, 42, 0.1);
+  border-color: #cbd5e1;
 }
 
 .title-row {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 20px;
 }
 
-.meta {
-  margin-top: 6px;
-  font-size: 12px;
-  color: #6b7280;
-  display: flex;
-  justify-content: space-between;
+.title-row h3 {
+  font-size: 17px;
+  font-weight: 700;
+  color: #1e293b;
+  margin: 0;
+  line-height: 1.4;
+  flex: 1;
 }
 
 .status {
-  padding: 4px 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
   border-radius: 999px;
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
-.status[data-status='0'] {
-  background-color: #ecfdf5;
-  color: #15803d;
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
 }
 
-.status[data-status='1'] {
-  background-color: #fef9c3;
-  color: #a16207;
+.status[data-status='0'] { background-color: #ecfdf5; color: #059669; }
+.status[data-status='0'] .status-dot { background-color: #059669; }
+.status[data-status='1'] { background-color: #fefce8; color: #ca8a04; }
+.status[data-status='1'] .status-dot { background-color: #ca8a04; }
+.status[data-status='2'] { background-color: #eff6ff; color: #2563eb; }
+.status[data-status='2'] .status-dot { background-color: #2563eb; }
+.status[data-status='3'] { background-color: #fef2f2; color: #dc2626; }
+.status[data-status='3'] .status-dot { background-color: #dc2626; }
+
+.meta-data {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 16px;
+  border-top: 1px dashed #e2e8f0;
 }
 
-.status[data-status='2'] {
-  background-color: #eff6ff;
-  color: #1d4ed8;
+.meta-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
 }
 
-.status[data-status='3'] {
-  background-color: #fef2f2;
-  color: #b91c1c;
+.meta-label {
+  color: #64748b;
+  font-weight: 500;
 }
 
-.empty {
-  font-size: 14px;
-  color: #6b7280;
+.meta-value {
+  color: #334155;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  background: #f1f5f9;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-weight: 500;
+}
+.meta-value.time { font-family: inherit; }
+
+/* 状态容器 (加载中/空数据) */
+.state-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 64px 20px;
+  background: #ffffff;
+  border-radius: 16px;
+  border: 1px dashed #cbd5e1;
+  color: #64748b;
+  gap: 16px;
+  font-size: 15px;
 }
 
+.spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid #e2e8f0;
+  border-top-color: #2563eb;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+/* 分页 */
 .pagination {
-  margin-top: 14px;
+  margin-top: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  font-size: 13px;
-  color: #374151;
+  gap: 16px;
 }
 
+.page-btn {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #334155;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.page-btn:hover:not(:disabled) {
+  border-color: #2563eb;
+  color: #2563eb;
+}
+
+.page-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: #f8fafc;
+}
+
+.page-info {
+  font-size: 14px;
+  color: #64748b;
+}
+.page-info strong { color: #0f172a; }
+
+/* Modal 弹窗 */
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(15, 23, 42, 0.35);
+  background: rgba(15, 23, 42, 0.4);
+  backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 50;
+  z-index: 100;
 }
 
 .modal {
-  width: 520px;
-  max-width: 95%;
-  background: #fff;
-  border-radius: 16px;
-  padding: 20px 22px;
-  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.5);
+  width: 560px;
+  max-width: 90vw;
+  background: #ffffff;
+  border-radius: 20px;
+  padding: 28px;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+  animation: modalSlideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes modalSlideUp {
+  from { opacity: 0; transform: translateY(20px) scale(0.95); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.modal-header h3 {
+  font-size: 20px;
+  font-weight: 700;
+  color: #0f172a;
+  margin: 0;
+}
+
+.close-btn {
+  background: transparent;
+  border: none;
+  font-size: 24px;
+  color: #94a3b8;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+.close-btn:hover { color: #0f172a; }
+
+.hint {
+  font-size: 13px;
+  color: #64748b;
+  margin: 8px 0 20px 0;
+}
+
+.form-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
 .field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin-top: 8px;
-}
-
-.field-row {
-  display: flex;
-  gap: 10px;
-  margin-top: 8px;
-}
-
-label {
-  font-size: 13px;
-  color: #374151;
-}
-
-input,
-textarea,
-select {
-  border-radius: 8px;
-  border: 1px solid #d1d5db;
-  padding: 6px 10px;
-  font-size: 14px;
-}
-
-.actions {
-  margin-top: 14px;
-  display: flex;
-  justify-content: flex-end;
   gap: 8px;
 }
 
-.error {
-  margin-top: 6px;
-  font-size: 12px;
-  color: #b91c1c;
+.field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
 }
 
-.hint {
-  font-size: 12px;
-  color: #6b7280;
+.field label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #334155;
 }
+
+.required { color: #ef4444; }
+
+input, textarea, select {
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  padding: 10px 12px;
+  font-size: 14px;
+  color: #0f172a;
+  transition: all 0.2s;
+  background: #f8fafc;
+  font-family: inherit;
+}
+
+input:focus, textarea:focus, select:focus {
+  outline: none;
+  border-color: #2563eb;
+  background: #ffffff;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.file-upload {
+  position: relative;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 16px;
+  text-align: center;
+  transition: all 0.2s;
+}
+.file-upload:hover { border-color: #2563eb; background: #eff6ff; }
+
+.file-input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+  width: 100%;
+}
+
+.file-placeholder {
+  font-size: 13px;
+  color: #64748b;
+  pointer-events: none;
+}
+.file-selected { color: #2563eb; font-weight: 500; }
+
+.error-msg {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #dc2626;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.actions {
+  margin-top: 24px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.btn-ghost {
+  padding: 10px 20px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #64748b;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.btn-ghost:hover { background: #f1f5f9; color: #0f172a; }
+
+.spinner-small {
+  width: 14px; height: 14px;
+  border: 2px solid #ffffff;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Vue 动画过渡 */
+.fade-enter-active, .fade-leave-active { transition: opacity 0.2s; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
 </style>
-

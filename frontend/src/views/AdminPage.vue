@@ -231,168 +231,371 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="page">
-    <h2>用户与白名单管理（管理员）</h2>
-    <p class="tip">
-      使用管理员钱包连接后，可对待审核用户进行授权、对已有白名单用户进行移除，并控制系统是否暂停投票。
-    </p>
-
-    <section class="section">
-      <h3>系统投票开关</h3>
-      <div class="pause-row">
-        <span>当前状态：{{ paused === null ? '未知' : paused ? '已暂停' : '正常' }}</span>
+  <div class="admin-dashboard">
+    <header class="dashboard-header">
+      <div class="header-text">
+        <h2>系统管理控制台</h2>
+        <p class="tip">控制网络全局状态，审核居民身份并将权限写入区块链白名单。</p>
+      </div>
+      
+      <div class="status-controller" :class="{ 'is-paused': paused, 'is-active': paused === false }">
+        <div class="status-info">
+          <div class="status-dot"></div>
+          <span class="status-text">系统状态：{{ paused === null ? '获取中...' : paused ? '已暂停 (不可投票)' : '运行中 (正常)' }}</span>
+        </div>
         <button
           type="button"
-          class="btn-pause"
+          class="btn-toggle-pause"
+          :class="paused ? 'resume-mode' : 'pause-mode'"
           :disabled="paused === null || togglingPause"
           @click="togglePause"
         >
-          {{ paused ? '恢复提案与投票' : '紧急暂停投票' }}
+          <span v-if="togglingPause" class="spinner-small"></span>
+          {{ togglingPause ? '上链中...' : (paused ? '恢复系统运行' : '紧急暂停系统') }}
         </button>
       </div>
-    </section>
+    </header>
 
-    <section class="section">
-      <h3>待审核用户</h3>
-      <div v-if="loadingPending">加载中...</div>
-      <div v-else-if="!pendingUsers.length" class="empty">当前没有待审核用户</div>
-      <div v-else class="list">
-        <div v-for="u in pendingUsers" :key="u.id" class="card">
-          <div class="top">
-            <div>
-              <div class="name">{{ u.realName }}</div>
-              <div class="addr">{{ u.walletAddr }}</div>
-            </div>
-            <div class="house">
-              {{ u.buildNo }}-{{ u.unitNo }}-{{ u.roomNo }} · {{ u.houseArea }}㎡
-            </div>
+    <div class="dashboard-content">
+      <section class="admin-section">
+        <div class="section-header">
+          <h3>
+            <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="8.5" cy="7" r="4"></circle><polyline points="17 11 19 13 23 9"></polyline></svg>
+            待审核用户申请
+          </h3>
+          <span class="badge" v-if="pendingUsers.length">{{ pendingUsers.length }}</span>
+        </div>
+
+        <div class="list-container">
+          <div v-if="loadingPending" class="state-msg">
+            <span class="spinner-small blue"></span> 正在同步数据...
           </div>
-          <div class="actions">
-            <button type="button" class="btn-approve" @click="approve(u)">通过并上链</button>
-            <button type="button" class="btn-reject" @click="reject(u)">驳回</button>
+          <div v-else-if="!pendingUsers.length" class="state-msg empty">
+            <svg viewBox="0 0 24 24" width="32" height="32" stroke="#cbd5e1" stroke-width="1.5" fill="none"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+            <p>目前没有待审核的申请</p>
+          </div>
+          
+          <div v-else class="user-list">
+            <div v-for="u in pendingUsers" :key="u.id" class="user-card pending-card">
+              <div class="user-info">
+                <div class="avatar">{{ u.realName.charAt(0) }}</div>
+                <div class="details">
+                  <div class="name-row">
+                    <span class="name">{{ u.realName }}</span>
+                    <span class="house-tag">{{ u.buildNo }}栋{{ u.unitNo }}单元{{ u.roomNo }}室 · {{ u.houseArea }}㎡</span>
+                  </div>
+                  <div class="addr-box">{{ u.walletAddr }}</div>
+                </div>
+              </div>
+              <div class="action-buttons">
+                <button type="button" class="btn-action approve" @click="approve(u)">授权上链</button>
+                <button type="button" class="btn-action reject" @click="reject(u)">驳回</button>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <section class="section">
-      <h3>已在白名单中的用户</h3>
-      <div v-if="loadingApproved">加载中...</div>
-      <div v-else-if="!approvedUsers.length" class="empty">当前没有白名单用户</div>
-      <div v-else class="list">
-        <div v-for="u in approvedUsers" :key="u.id" class="card">
-          <div class="top">
-            <div>
-              <div class="name">{{ u.realName }}</div>
-              <div class="addr">{{ u.walletAddr }}</div>
-            </div>
-            <div class="house">
-              {{ u.buildNo }}-{{ u.unitNo }}-{{ u.roomNo }} · {{ u.houseArea }}㎡
-            </div>
+      <section class="admin-section">
+        <div class="section-header">
+          <h3>
+            <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+            链上白名单列表
+          </h3>
+          <span class="badge gray" v-if="approvedUsers.length">{{ approvedUsers.length }}</span>
+        </div>
+
+        <div class="list-container">
+          <div v-if="loadingApproved" class="state-msg">
+            <span class="spinner-small blue"></span> 正在同步链上数据...
           </div>
-          <div class="actions">
-            <button type="button" class="btn-reject" @click="removeFromWhitelist(u)">移除白名单</button>
+          <div v-else-if="!approvedUsers.length" class="state-msg empty">
+            <p>当前白名单为空</p>
+          </div>
+          
+          <div v-else class="user-list">
+            <div v-for="u in approvedUsers" :key="u.id" class="user-card approved-card">
+              <div class="user-info">
+                <div class="details">
+                  <div class="name-row">
+                    <span class="name">{{ u.realName }}</span>
+                    <span class="house-tag bg-blue">{{ u.houseArea }}㎡ 权重</span>
+                  </div>
+                  <div class="addr-box">{{ u.walletAddr }}</div>
+                </div>
+              </div>
+              <div class="action-buttons">
+                <button type="button" class="btn-action remove" @click="removeFromWhitelist(u)">移除权限</button>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
-    </section>
+      </section>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.page {
-  max-width: 900px;
+.admin-dashboard {
+  max-width: 1200px;
   margin: 0 auto;
+  animation: fadeIn 0.4s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* 顶部控制台样式 */
+.dashboard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-bottom: 32px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid #e2e8f0;
+  flex-wrap: wrap;
+  gap: 20px;
+}
+
+.header-text h2 {
+  font-size: 28px;
+  font-weight: 800;
+  color: #0f172a;
+  margin: 0 0 8px 0;
+  letter-spacing: -0.5px;
 }
 
 .tip {
+  font-size: 14px;
+  color: #64748b;
+  margin: 0;
+}
+
+/* 全局状态卡片 */
+.status-controller {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 12px 20px;
+  background: #ffffff;
+  border-radius: 16px;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+  transition: all 0.3s;
+}
+
+.status-controller.is-active { border-color: #a7f3d0; background: #ecfdf5; }
+.status-controller.is-active .status-dot { background: #10b981; box-shadow: 0 0 0 3px #d1fae5; }
+.status-controller.is-active .status-text { color: #047857; }
+
+.status-controller.is-paused { border-color: #fecaca; background: #fef2f2; }
+.status-controller.is-paused .status-dot { background: #ef4444; box-shadow: 0 0 0 3px #fee2e2; }
+.status-controller.is-paused .status-text { color: #b91c1c; }
+
+.status-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.status-dot { width: 10px; height: 10px; border-radius: 50%; background: #94a3b8; }
+.status-text { font-size: 14px; font-weight: 600; }
+
+.btn-toggle-pause {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 8px;
+  padding: 8px 16px;
+  border: none;
   font-size: 13px;
-  color: #4b5563;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  color: #fff;
+}
+.btn-toggle-pause:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.pause-mode { background-color: #ef4444; box-shadow: 0 4px 6px -1px rgba(239, 68, 68, 0.2); }
+.pause-mode:hover:not(:disabled) { background-color: #dc2626; }
+.resume-mode { background-color: #10b981; box-shadow: 0 4px 6px -1px rgba(16, 185, 129, 0.2); }
+.resume-mode:hover:not(:disabled) { background-color: #059669; }
+
+
+/* 两栏布局 */
+.dashboard-content {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 32px;
+  align-items: start;
 }
 
-.section {
-  margin-top: 16px;
+@media (max-width: 960px) {
+  .dashboard-content { grid-template-columns: 1fr; }
 }
 
-.pause-row {
+.admin-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.section-header h3 {
+  font-size: 18px;
+  font-weight: 700;
+  color: #1e293b;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.badge {
+  background: #ef4444;
+  color: white;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+.badge.gray { background: #e2e8f0; color: #475569; }
+
+.list-container {
+  background: #ffffff;
+  border-radius: 16px;
+  border: 1px solid #e2e8f0;
+  min-height: 200px;
+  padding: 16px;
+}
+
+.state-msg {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 160px;
+  color: #64748b;
+  font-size: 14px;
+  gap: 12px;
+}
+
+.user-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* 用户卡片设计 */
+.user-card {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font-size: 13px;
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid #f1f5f9;
+  background: #f8fafc;
+  transition: all 0.2s;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+.user-card:hover { background: #ffffff; border-color: #cbd5e1; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); }
+
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex: 1;
+  min-width: 240px;
 }
 
-.btn-pause {
-  border-radius: 999px;
-  padding: 6px 14px;
-  border: none;
-  font-size: 13px;
-  cursor: pointer;
-  background-color: #f97316;
-  color: #fff;
+.avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: #e0e7ff;
+  color: #4f46e5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  font-weight: 700;
 }
 
-.list {
-  margin-top: 8px;
+.details {
   display: flex;
   flex-direction: column;
+  gap: 6px;
+}
+
+.name-row {
+  display: flex;
+  align-items: center;
   gap: 10px;
 }
 
-.card {
-  background: #fff;
-  border-radius: 12px;
-  padding: 12px 14px;
-  box-shadow: 0 1px 4px rgba(148, 163, 184, 0.3);
-}
+.name { font-weight: 700; color: #0f172a; font-size: 15px; }
 
-.top {
-  display: flex;
-  justify-content: space-between;
-}
-
-.name {
-  font-weight: 600;
-}
-
-.addr {
+.house-tag {
   font-size: 12px;
-  color: #6b7280;
+  background: #e2e8f0;
+  color: #475569;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-weight: 500;
 }
+.house-tag.bg-blue { background: #dbeafe; color: #1e40af; }
 
-.house {
+.addr-box {
+  font-family: ui-monospace, SFMono-Regular, monospace;
   font-size: 13px;
-  color: #374151;
+  color: #64748b;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  padding: 4px 8px;
+  border-radius: 6px;
+  word-break: break-all;
 }
 
-.actions {
-  margin-top: 10px;
+/* 按钮组 */
+.action-buttons {
   display: flex;
-  gap: 10px;
+  gap: 8px;
 }
 
-.btn-approve,
-.btn-reject {
-  border-radius: 999px;
-  padding: 6px 14px;
-  border: none;
+.btn-action {
+  border-radius: 8px;
+  padding: 8px 16px;
+  border: 1px solid transparent;
   font-size: 13px;
+  font-weight: 600;
   cursor: pointer;
+  transition: all 0.2s;
 }
 
-.btn-approve {
-  background-color: #16a34a;
-  color: #fff;
-}
+.btn-action.approve { background-color: #2563eb; color: #fff; }
+.btn-action.approve:hover { background-color: #1d4ed8; }
 
-.btn-reject {
-  background-color: #fee2e2;
-  color: #b91c1c;
-}
+.btn-action.reject { background-color: transparent; border-color: #fecaca; color: #ef4444; }
+.btn-action.reject:hover { background-color: #fef2f2; }
 
-.empty {
-  margin-top: 12px;
-  font-size: 14px;
-  color: #6b7280;
+.btn-action.remove { background-color: #fef2f2; border-color: #fecaca; color: #dc2626; }
+.btn-action.remove:hover { background-color: #fee2e2; }
+
+.spinner-small {
+  width: 14px; height: 14px;
+  border: 2px solid #ffffff;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
 }
+.spinner-small.blue { border-color: #e2e8f0; border-top-color: #2563eb; width: 20px; height: 20px; }
+
+@keyframes spin { to { transform: rotate(360deg); } }
 </style>
-

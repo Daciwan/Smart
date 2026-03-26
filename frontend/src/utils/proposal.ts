@@ -6,6 +6,49 @@ export function proposalStatusLabel(status: number): string {
   return '未知';
 }
 
+export interface ProposalStatusInput {
+  propStatus: number;
+  deadline?: string | null;
+  onchainDeadlineSec?: number | null;
+  onchainTallied?: boolean | null;
+}
+
+export function isProposalVoteClosed(input: ProposalStatusInput): boolean {
+  // 链下状态：0 进行中；非 0 视为不可投票
+  if (Number(input.propStatus) !== 0) return true;
+
+  // 优先使用链上截止时间（秒）
+  const chainSec = Number(input.onchainDeadlineSec ?? 0);
+  if (!Number.isNaN(chainSec) && chainSec > 0) {
+    return Math.floor(Date.now() / 1000) >= chainSec;
+  }
+
+  // 链上不可用时使用链下截止时间
+  const ms = new Date(String(input.deadline || '')).getTime();
+  if (!Number.isNaN(ms) && ms > 0) {
+    return Date.now() >= ms;
+  }
+
+  return false;
+}
+
+export function getProposalDisplayStatus(input: ProposalStatusInput): string {
+  if (Boolean(input.onchainTallied)) {
+    // 结算完成后，状态应为已通过或已驳回
+    if (input.propStatus === 2) return '已通过';
+    if (input.propStatus === 3) return '已驳回';
+  }
+
+  if (input.propStatus === 2) return '已通过';
+  if (input.propStatus === 3) return '已驳回';
+
+  if (isProposalVoteClosed(input)) {
+    return input.propStatus === 1 ? '已截至但未结算' : '已截止';
+  }
+
+  return '进行中';
+}
+
 export function formatProposalDeadline(deadline: string): string {
   return new Date(deadline).toLocaleString();
 }
