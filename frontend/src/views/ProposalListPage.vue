@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { ethers } from 'ethers';
 import { useWalletStore } from '../stores/wallet';
@@ -17,7 +17,6 @@ interface Proposal {
 }
 
 const CONTRACT_ADDRESS = GOVERNOR_CONTRACT_ADDRESS;
-// 【关键修改】在 ABI 中补充了 whitelist 视图函数查询
 const CONTRACT_ABI = [
   'function createProposal(bytes32 contentHash, uint8 propType, uint64 deadline) returns (uint256)',
   'function proposalCount() view returns (uint256)',
@@ -46,18 +45,21 @@ const form = ref({
   deadline: '',
 });
 const imageFiles = ref<File[]>([]);
+let pollTimer: ReturnType<typeof setInterval> | null = null;
 
-async function loadProposals() {
-  if (loading.value) return;
-  loading.value = true;
+// 增加 isSilent 参数
+async function loadProposals(isSilent = false) {
+  if (!isSilent && loading.value) return;
+  if (!isSilent) loading.value = true;
   try {
     const resp = await fetch('http://127.0.0.1:8080/api/proposals');
     if (!resp.ok) throw new Error('加载失败');
     proposals.value = await resp.json();
   } catch (err) {
     console.error(err);
+    if (!isSilent) alert('加载提案失败，请确认后端已启动');
   } finally {
-    loading.value = false;
+    if (!isSilent) loading.value = false;
   }
 }
 
@@ -100,25 +102,14 @@ watch([keyword, proposals, activeCategory], () => { currentPage.value = 1; });
 
 function goDetail(p: Proposal) { router.push(`/proposals/${p.id}`); }
 
-// 【关键修改】打开弹窗前，校验合约白名单
 async function openCreate() {
-  if (!wallet.address) {
-    alert('请先在右上角连接钱包');
-    return;
-  }
-  if (!window.ethereum) {
-    alert('未检测到 MetaMask');
-    return;
-  }
-  
+  if (!wallet.address) { alert('请先在右上角连接钱包'); return; }
+  if (!window.ethereum) { alert('未检测到 MetaMask'); return; }
   try {
     const provider = new ethers.BrowserProvider(window.ethereum);
     const contract: any = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, provider);
-    
-    // 查询链上该用户的白名单状态
     const voter = await contract.whitelist(wallet.address);
     const isAuth = Boolean(voter?.isAuth ?? voter?.[0]);
-    
     if (!isAuth) {
       alert('权限不足⛔\n\n仅社区白名单居民可以发起提案。请先前往「身份认证」页面提交资料并等待管理员通过。');
       return;
@@ -128,16 +119,11 @@ async function openCreate() {
     alert('检查白名单权限失败，请确认区块链网络连接正常');
     return;
   }
-
   showCreate.value = true;
   createError.value = null;
 }
 
-function closeCreate() {
-  showCreate.value = false;
-  createError.value = null;
-  imageFiles.value = [];
-}
+function closeCreate() { showCreate.value = false; createError.value = null; imageFiles.value = []; }
 
 function onSelectImages(e: Event) {
   const target = e.target as HTMLInputElement;
@@ -199,7 +185,17 @@ async function submitCreate() {
   }
 }
 
-onMounted(() => { loadProposals(); });
+onMounted(() => { 
+  loadProposals(); 
+  // 每 5 秒后台静默刷新一次数据
+  pollTimer = setInterval(() => {
+    loadProposals(true);
+  }, 5000);
+});
+
+onUnmounted(() => {
+  if (pollTimer) clearInterval(pollTimer);
+});
 </script>
 
 <template>

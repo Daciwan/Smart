@@ -19,7 +19,9 @@ const loading = ref(false);
 const voting = ref(false);
 const onchainInfo = ref<any | null>(null);
 const contractRef = ref<any | null>(null);
+let pollTimer: ReturnType<typeof setInterval> | null = null;
 
+// TODO: 部署合约后将此地址替换为实际部署地址
 const CONTRACT_ADDRESS = GOVERNOR_CONTRACT_ADDRESS;
 const CONTRACT_ABI = [
   'function getProposal(uint256 proposalId) view returns (tuple(uint256 id, bytes32 contentHash, address creator, uint8 propType, uint64 startTime, uint64 deadline, uint256 yesVotes, uint256 noVotes, uint256 abstainVotes, uint8 status, bool tallied))',
@@ -31,8 +33,9 @@ const CONTRACT_ABI = [
 
 const id = computed(() => Number(route.params.id));
 
-async function loadProposal() {
-  loading.value = true;
+// 增加 isSilent 参数
+async function loadProposal(isSilent = false) {
+  if (!isSilent) loading.value = true;
   try {
     const resp = await fetch(`http://127.0.0.1:8080/api/proposals/${id.value}`);
     if (!resp.ok) {
@@ -41,14 +44,14 @@ async function loadProposal() {
     proposal.value = await resp.json();
   } catch (err) {
     console.error(err);
-    alert('加载提案失败，请确认后端已启动');
+    if (!isSilent) alert('加载提案失败，请确认后端已启动');
   } finally {
-    loading.value = false;
+    if (!isSilent) loading.value = false;
   }
 }
 
 async function loadOnchain() {
-  if (!window.ethereum || !CONTRACT_ADDRESS) {
+  if (!window.ethereum || !CONTRACT_ADDRESS || !proposal.value) {
     return;
   }
   try {
@@ -115,16 +118,9 @@ const showSettlementSection = computed(() => {
 
 const resolving = ref(false);
 
-// 仅在用户点击“查看结果”按钮时触发结算
 async function resolveProposal() {
-  if (!wallet.address) {
-    alert('请先在右上角连接钱包');
-    return;
-  }
-  if (!window.ethereum) {
-    alert('未检测到 MetaMask');
-    return;
-  }
+  if (!wallet.address) { alert('请先在右上角连接钱包'); return; }
+  if (!window.ethereum) { alert('未检测到 MetaMask'); return; }
   if (!proposal.value || !CONTRACT_ADDRESS) return;
 
   resolving.value = true;
@@ -134,13 +130,11 @@ async function resolveProposal() {
     const contract: any = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
 
     const pid = Number(proposal.value.propId || proposal.value.id);
-    // 先做静态调用，提前拿到更清晰的 revert 提示
     await contract.resolve.staticCall(pid);
     const tx = await contract.resolve(pid);
     alert('结算交易已发送，等待确认：' + tx.hash);
     await tx.wait();
 
-    // 结算后主动刷新一次链上数据，避免事件监听未命中时 UI 不更新
     await loadOnchain();
   } catch (err: any) {
     console.error(err);
@@ -151,18 +145,9 @@ async function resolveProposal() {
 }
 
 async function doVote(choice: number) {
-  if (!wallet.address) {
-    alert('请先在右上角连接钱包');
-    return;
-  }
-  if (!window.ethereum) {
-    alert('未检测到 MetaMask');
-    return;
-  }
-  if (!CONTRACT_ADDRESS) {
-    alert('请先在前端代码中配置合约地址');
-    return;
-  }
+  if (!wallet.address) { alert('请先在右上角连接钱包'); return; }
+  if (!window.ethereum) { alert('未检测到 MetaMask'); return; }
+  if (!CONTRACT_ADDRESS) { alert('请先在前端代码中配置合约地址'); return; }
   voting.value = true;
   try {
     const provider = new ethers.BrowserProvider(window.ethereum);
@@ -178,12 +163,9 @@ async function doVote(choice: number) {
     const tx = await contract.vote(proposal.value.propId || proposal.value.id, choice);
     alert('交易已发送，等待确认：' + tx.hash);
 
-    // 链上成功后，将投票记录写入后端缓存（简化实现，这里没有等待确认事件）
     await fetch(`http://127.0.0.1:8080/api/proposals/${proposal.value.id}/votes`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         propId: proposal.value.propId || proposal.value.id,
         voterAddr: wallet.address,
@@ -204,9 +186,16 @@ onMounted(async () => {
   await loadProposal();
   await loadOnchain();
   await setupEventListener();
+
+  // 增加 5 秒轮询，同时刷新链下和链上数据
+  pollTimer = setInterval(() => {
+    loadProposal(true); // 静默刷新链下
+    loadOnchain();      // 静默刷新链上
+  }, 5000);
 });
 
 onUnmounted(() => {
+  if (pollTimer) clearInterval(pollTimer);
   if (contractRef.value) {
     contractRef.value.removeAllListeners('ProposalResolved');
   }
