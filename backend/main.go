@@ -82,6 +82,7 @@ func main() {
 			admin.POST("/identity/:id/reject", handlers.RejectIdentity)
 			admin.POST("/identity/:id/remove", handlers.RemoveIdentityFromWhitelist)
 			admin.POST("/contract/pause-log", handlers.LogPauseToggle)
+			admin.DELETE("/proposals/:id", handlers.DeleteProposal)
 		}
 
 		// 提案与投票

@@ -313,3 +313,39 @@ func buildProposalResponses(props []models.Proposal) ([]ProposalResponse, error)
 	return out, nil
 }
 
+// DeleteProposal 管理员删除链下提案记录
+func DeleteProposal(c *gin.Context) {
+	id := c.Param("id")
+	adminAddr := strings.ToLower(strings.TrimSpace(c.GetHeader("X-Admin-Addr")))
+	
+	if adminAddr == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing admin address"})
+		return
+	}
+
+	// 1. 确认提案存在
+	var prop models.Proposal
+	if err := db.DB.First(&prop, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "proposal not found"})
+		return
+	}
+
+	// 2. 删除提案记录 (硬删除)
+	if err := db.DB.Delete(&models.Proposal{}, id).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete proposal: " + err.Error()})
+		return
+	}
+
+	// 3. 将删除操作写入 sys_configs 表
+	logEntry := models.SysConfig{
+		ParamName:  "DELETE_PROPOSAL",
+		ParamValue: fmt.Sprintf("Deleted PropID: %d, Title: %s", prop.PropID, prop.PropTitle),
+		AdminAddr:  adminAddr,
+	}
+	if err := db.DB.Create(&logEntry).Error; err != nil {
+		// 日志写入失败不影响主流程，但打印记录
+		fmt.Printf("failed to write sys config log: %v\n", err)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "proposal deleted successfully"})
+}

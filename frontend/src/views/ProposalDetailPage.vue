@@ -20,7 +20,6 @@ const voting = ref(false);
 const onchainInfo = ref<any | null>(null);
 const contractRef = ref<any | null>(null);
 
-// TODO: 部署合约后将此地址替换为实际部署地址
 const CONTRACT_ADDRESS = GOVERNOR_CONTRACT_ADDRESS;
 const CONTRACT_ABI = [
   'function getProposal(uint256 proposalId) view returns (tuple(uint256 id, bytes32 contentHash, address creator, uint8 propType, uint64 startTime, uint64 deadline, uint256 yesVotes, uint256 noVotes, uint256 abstainVotes, uint8 status, bool tallied))',
@@ -238,6 +237,13 @@ onUnmounted(() => {
               <span class="value addr">{{ proposal.creatorAddr }}</span>
             </div>
             <div class="meta-item">
+              <span class="label">计票模式</span>
+              <span class="value mode-tag">
+                <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+                {{ proposal.propType === 1 ? '面积加权 (按房产面积计票)' : '一人一票 (平等计票)' }}
+              </span>
+            </div>
+            <div class="meta-item">
               <span class="label">截止时间</span>
               <span class="value">{{ formatProposalDeadline(proposal.deadline) }}</span>
             </div>
@@ -276,6 +282,9 @@ onUnmounted(() => {
 
         <div v-if="onchainInfo" class="action-card data-card">
           <h3 class="card-title">实时票数分布</h3>
+          <p class="hint-text" style="margin-bottom: 12px; font-size: 12px;">
+            当前为：{{ proposal.propType === 1 ? '按面积计算总权重' : '按投票人数计算' }}
+          </p>
           
           <div class="chart-container">
             <div class="donut-chart" :style="chartStyle">
@@ -445,6 +454,20 @@ onUnmounted(() => {
 .meta-item .value { font-size: 14px; font-weight: 600; color: #0f172a; }
 .meta-item .value.addr { font-family: ui-monospace, monospace; color: #2563eb; }
 
+/* 计票模式专属标签样式 */
+.value.mode-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background-color: #e0e7ff;
+  color: #4338ca;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  border: 1px solid #c7d2fe;
+}
+
 /* 提案正文 */
 .proposal-body {
   padding: 32px;
@@ -474,17 +497,17 @@ onUnmounted(() => {
   overflow: hidden;
   border: 1px solid #e2e8f0;
   background: #f8fafc;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 .proposal-image {
   width: 100%;
   height: 240px;
   object-fit: contain;
+  background-color: #f8fafc;
   transition: transform 0.3s;
   cursor: pointer;
-  background: #f8fafc;
-  display: flex;             /* 新增：使用 flex 布局 */
-  align-items: center;       /* 新增：垂直居中 */
-  justify-content: center;
 }
 .proposal-image:hover { transform: scale(1.02); }
 
@@ -557,7 +580,7 @@ onUnmounted(() => {
   flex-direction: column;
   align-items: center;
   gap: 24px;
-  margin-top: 20px;
+  margin-top: 10px;
 }
 
 .donut-chart {
@@ -565,10 +588,8 @@ onUnmounted(() => {
   height: 160px;
   border-radius: 50%;
   position: relative;
-  /* 背景渐变由 Vue script 控制 */
 }
 
-/* 核心技巧：挖空中心形成环形图 */
 .donut-hole {
   position: absolute;
   top: 50%;

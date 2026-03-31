@@ -16,11 +16,12 @@ interface Proposal {
   imagePaths?: string[];
 }
 
-// 与详情页保持一致的合约地址和 ABI
 const CONTRACT_ADDRESS = GOVERNOR_CONTRACT_ADDRESS;
+// 【关键修改】在 ABI 中补充了 whitelist 视图函数查询
 const CONTRACT_ABI = [
   'function createProposal(bytes32 contentHash, uint8 propType, uint64 deadline) returns (uint256)',
   'function proposalCount() view returns (uint256)',
+  'function whitelist(address voter) view returns (bool isAuth, uint256 weight)'
 ];
 
 const router = useRouter();
@@ -32,7 +33,8 @@ const keyword = ref('');
 type CategoryKey = 'all' | 'ongoing' | 'settled' | 'passed' | 'rejected' | 'unsettled';
 const activeCategory = ref<CategoryKey>('all');
 const currentPage = ref(1);
-const PAGE_SIZE = 5;
+
+const PAGE_SIZE = 16; 
 
 const showCreate = ref(false);
 const creating = ref(false);
@@ -40,7 +42,7 @@ const createError = ref<string | null>(null);
 const form = ref({
   title: '',
   desc: '',
-  mode: '0', // 0: 一人一票, 1: 面积加权
+  mode: '0', 
   deadline: '',
 });
 const imageFiles = ref<File[]>([]);
@@ -50,13 +52,10 @@ async function loadProposals() {
   loading.value = true;
   try {
     const resp = await fetch('http://127.0.0.1:8080/api/proposals');
-    if (!resp.ok) {
-      throw new Error('加载失败');
-    }
+    if (!resp.ok) throw new Error('加载失败');
     proposals.value = await resp.json();
   } catch (err) {
     console.error(err);
-    alert('加载提案失败，请确认后端已启动');
   } finally {
     loading.value = false;
   }
@@ -94,27 +93,42 @@ const pagedProposals = computed(() => {
   return filteredProposals.value.slice(start, start + PAGE_SIZE);
 });
 
-function prevPage() {
-  if (currentPage.value > 1) currentPage.value -= 1;
-}
+function prevPage() { if (currentPage.value > 1) currentPage.value -= 1; }
+function nextPage() { if (currentPage.value < totalPages.value) currentPage.value += 1; }
 
-function nextPage() {
-  if (currentPage.value < totalPages.value) currentPage.value += 1;
-}
+watch([keyword, proposals, activeCategory], () => { currentPage.value = 1; });
 
-watch([keyword, proposals, activeCategory], () => {
-  currentPage.value = 1;
-});
+function goDetail(p: Proposal) { router.push(`/proposals/${p.id}`); }
 
-function goDetail(p: Proposal) {
-  router.push(`/proposals/${p.id}`);
-}
-
-function openCreate() {
+// 【关键修改】打开弹窗前，校验合约白名单
+async function openCreate() {
   if (!wallet.address) {
     alert('请先在右上角连接钱包');
     return;
   }
+  if (!window.ethereum) {
+    alert('未检测到 MetaMask');
+    return;
+  }
+  
+  try {
+    const provider = new ethers.BrowserProvider(window.ethereum);
+    const contract: any = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, provider);
+    
+    // 查询链上该用户的白名单状态
+    const voter = await contract.whitelist(wallet.address);
+    const isAuth = Boolean(voter?.isAuth ?? voter?.[0]);
+    
+    if (!isAuth) {
+      alert('权限不足⛔\n\n仅社区白名单居民可以发起提案。请先前往「身份认证」页面提交资料并等待管理员通过。');
+      return;
+    }
+  } catch (err) {
+    console.error('检查白名单失败', err);
+    alert('检查白名单权限失败，请确认区块链网络连接正常');
+    return;
+  }
+
   showCreate.value = true;
   createError.value = null;
 }
@@ -132,29 +146,16 @@ function onSelectImages(e: Event) {
 }
 
 async function submitCreate() {
-  if (!wallet.address) {
-    alert('请先在右上角连接钱包');
-    return;
-  }
+  if (!wallet.address) { alert('请先在右上角连接钱包'); return; }
   const title = form.value.title.trim();
   const desc = form.value.desc.trim();
-  if (!title || !desc || !form.value.deadline) {
-    createError.value = '请完整填写提案标题、内容和截止时间';
-    return;
-  }
-  if (title.length < 4 || title.length > 50) {
-    createError.value = '提案标题长度需为 4-50 个字符';
-    return;
-  }
-  if (!window.ethereum) {
-    createError.value = '未检测到 MetaMask';
-    return;
-  }
+  if (!title || !desc || !form.value.deadline) { createError.value = '请完整填写提案标题、内容和截止时间'; return; }
+  if (title.length < 4 || title.length > 50) { createError.value = '提案标题长度需为 4-50 个字符'; return; }
+  if (!window.ethereum) { createError.value = '未检测到 MetaMask'; return; }
 
   creating.value = true;
   createError.value = null;
   try {
-    // 1. 先在链上创建提案（生成 ProposalId）
     const provider = new ethers.BrowserProvider(window.ethereum);
     const signer = await provider.getSigner();
     const contract: any = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
@@ -162,21 +163,16 @@ async function submitCreate() {
     const contentHash = ethers.keccak256(ethers.toUtf8Bytes(desc));
     const propType = parseInt(form.value.mode, 10);
     const parsed = parseDateTimeLocalToPayload(form.value.deadline);
-    if (!parsed.text || !parsed.unixSeconds) {
-      createError.value = '投票截止时间格式不正确';
-      return;
-    }
+    if (!parsed.text || !parsed.unixSeconds) { createError.value = '投票截止时间格式不正确'; return; }
     const deadlineSec = parsed.unixSeconds;
 
     const tx = await contract.createProposal(contentHash, propType, deadlineSec);
     alert('链上创建提案交易已发送：' + tx.hash);
     await tx.wait();
 
-    // 取当前提案总数，作为新的 ProposalId（合约中从 1 开始递增）
     const count = await contract.proposalCount();
     const onchainId = Number(count);
 
-    // 2. 再把提案的链下内容写入后端，并带上 propId 与 txHash
     const body = new FormData();
     body.append('propTitle', title);
     body.append('propDesc', desc);
@@ -185,18 +181,11 @@ async function submitCreate() {
     body.append('creatorAddr', wallet.address);
     body.append('propId', String(onchainId));
     body.append('txHash', tx.hash);
-    for (const f of imageFiles.value) {
-      body.append('images', f);
-    }
+    for (const f of imageFiles.value) { body.append('images', f); }
 
-    const resp = await fetch('http://127.0.0.1:8080/api/proposals', {
-      method: 'POST',
-      body,
-    });
+    const resp = await fetch('http://127.0.0.1:8080/api/proposals', { method: 'POST', body });
     const data = await resp.json();
-    if (!resp.ok) {
-      throw new Error(data.error || '创建失败（链下部分）');
-    }
+    if (!resp.ok) throw new Error(data.error || '创建失败（链下部分）');
 
     alert('提案已成功创建：链上 + 链下均已记录');
     showCreate.value = false;
@@ -204,16 +193,13 @@ async function submitCreate() {
     imageFiles.value = [];
     await loadProposals();
   } catch (err: any) {
-    console.error(err);
     createError.value = err?.message || '创建失败';
   } finally {
     creating.value = false;
   }
 }
 
-onMounted(() => {
-  loadProposals();
-});
+onMounted(() => { loadProposals(); });
 </script>
 
 <template>
@@ -231,52 +217,27 @@ onMounted(() => {
 
     <div class="toolbar">
       <div class="category-tabs">
-        <button
-          v-for="c in categoryOptions"
-          :key="c.key"
-          type="button"
-          class="tab-btn"
-          :class="{ active: activeCategory === c.key }"
-          @click="activeCategory = c.key"
-        >
-          {{ c.label }}
-        </button>
+        <button v-for="c in categoryOptions" :key="c.key" type="button" class="tab-btn" :class="{ active: activeCategory === c.key }" @click="activeCategory = c.key">{{ c.label }}</button>
       </div>
       <div class="search-wrapper">
         <svg class="search-icon" viewBox="0 0 24 24" width="16" height="16" stroke="#94a3b8" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-        <input
-          v-model.trim="keyword"
-          class="search-input"
-          type="text"
-          placeholder="搜索提案标题..."
-        />
+        <input v-model.trim="keyword" class="search-input" type="text" placeholder="搜索提案标题..." />
       </div>
     </div>
 
     <div v-if="loading" class="state-container">
-      <div class="spinner"></div>
-      <span>加载提案数据中...</span>
+      <div class="spinner"></div><span>加载提案数据中...</span>
     </div>
-    
     <div v-else-if="!filteredProposals.length" class="state-container empty">
       <svg viewBox="0 0 24 24" width="48" height="48" stroke="#cbd5e1" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="9" y1="21" x2="9" y2="9"></line></svg>
       <p>暂无匹配的提案，换个关键词或分类试试吧</p>
     </div>
-
     <div v-else class="list">
-      <div
-        v-for="p in pagedProposals"
-        :key="p.id"
-        class="card"
-        role="button"
-        tabindex="0"
-        @click="goDetail(p)"
-      >
+      <div v-for="p in pagedProposals" :key="p.id" class="card" role="button" tabindex="0" @click="goDetail(p)">
         <div class="title-row">
           <h3>{{ p.propTitle }}</h3>
           <span class="status" :data-status="p.propStatus">
-            <span class="status-dot"></span>
-            {{ proposalStatusLabel(p.propStatus) }}
+            <span class="status-dot"></span>{{ proposalStatusLabel(p.propStatus) }}
           </span>
         </div>
         <div class="meta-data">
@@ -362,459 +323,89 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.page {
-  animation: fadeIn 0.4s ease-out;
-}
+.page { animation: fadeIn 0.4s ease-out; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
-}
+.header { margin-bottom: 24px; display: flex; justify-content: space-between; align-items: flex-end; padding-bottom: 16px; border-bottom: 1px solid #e2e8f0; }
+.header-text h2 { font-size: 28px; font-weight: 800; color: #0f172a; margin: 0 0 8px 0; letter-spacing: -0.5px; }
+.sub { font-size: 14px; color: #64748b; }
 
-.header {
-  margin-bottom: 24px;
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-end;
-  padding-bottom: 16px;
-  border-bottom: 1px solid #e2e8f0;
-}
+.toolbar { margin-bottom: 24px; display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
+.category-tabs { display: inline-flex; background: #f1f5f9; padding: 4px; border-radius: 999px; gap: 4px; }
+.tab-btn { border: none; background: transparent; color: #64748b; border-radius: 999px; padding: 6px 16px; font-size: 14px; font-weight: 500; cursor: pointer; transition: all 0.2s; }
+.tab-btn:hover { color: #0f172a; }
+.tab-btn.active { background: #ffffff; color: #2563eb; box-shadow: 0 1px 3px rgba(0,0,0,0.1); font-weight: 600; }
 
-.header-text h2 {
-  font-size: 28px;
-  font-weight: 800;
-  color: #0f172a;
-  margin: 0 0 8px 0;
-  letter-spacing: -0.5px;
-}
+.search-wrapper { position: relative; flex: 1; max-width: 360px; }
+.search-icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); }
+.search-input { width: 100%; height: 40px; border-radius: 999px; border: 1px solid #e2e8f0; padding: 0 16px 0 36px; font-size: 14px; transition: all 0.2s; background: #ffffff; }
+.search-input:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1); }
 
-.sub {
-  font-size: 14px;
-  color: #64748b;
-}
+.btn-primary { display: flex; align-items: center; gap: 6px; background-color: #2563eb; color: #fff; border: none; border-radius: 999px; padding: 10px 20px; font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.2s; box-shadow: 0 4px 6px -1px rgba(37, 99, 235, 0.2); }
+.btn-primary:hover:not(:disabled) { background-color: #1d4ed8; transform: translateY(-1px); }
+.btn-primary:disabled { opacity: 0.7; cursor: not-allowed; }
 
-.toolbar {
-  margin-bottom: 24px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-  flex-wrap: wrap;
-}
+.list { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; }
+@media (max-width: 1200px) { .list { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 900px) { .list { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 640px) { .list { grid-template-columns: 1fr; } }
 
-.category-tabs {
-  display: inline-flex;
-  background: #f1f5f9;
-  padding: 4px;
-  border-radius: 999px;
-  gap: 4px;
-}
+.card { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 20px; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); cursor: pointer; display: flex; flex-direction: column; }
+.card:hover { transform: translateY(-4px); box-shadow: 0 12px 24px -8px rgba(15, 23, 42, 0.1); border-color: #cbd5e1; }
 
-.tab-btn {
-  border: none;
-  background: transparent;
-  color: #64748b;
-  border-radius: 999px;
-  padding: 6px 16px;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s;
-}
+.title-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 20px; }
+.title-row h3 { font-size: 16px; font-weight: 700; color: #1e293b; margin: 0; line-height: 1.4; flex: 1; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 
-.tab-btn:hover {
-  color: #0f172a;
-}
+.status { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.status-dot { width: 6px; height: 6px; border-radius: 50%; }
+.status[data-status='0'] { background-color: #ecfdf5; color: #059669; } .status[data-status='0'] .status-dot { background-color: #059669; }
+.status[data-status='1'] { background-color: #fefce8; color: #ca8a04; } .status[data-status='1'] .status-dot { background-color: #ca8a04; }
+.status[data-status='2'] { background-color: #eff6ff; color: #2563eb; } .status[data-status='2'] .status-dot { background-color: #2563eb; }
+.status[data-status='3'] { background-color: #fef2f2; color: #dc2626; } .status[data-status='3'] .status-dot { background-color: #dc2626; }
 
-.tab-btn.active {
-  background: #ffffff;
-  color: #2563eb;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-  font-weight: 600;
-}
-
-.search-wrapper {
-  position: relative;
-  flex: 1;
-  max-width: 360px;
-}
-
-.search-icon {
-  position: absolute;
-  left: 12px;
-  top: 50%;
-  transform: translateY(-50%);
-}
-
-.search-input {
-  width: 100%;
-  height: 40px;
-  border-radius: 999px;
-  border: 1px solid #e2e8f0;
-  padding: 0 16px 0 36px;
-  font-size: 14px;
-  transition: all 0.2s;
-  background: #ffffff;
-}
-
-.search-input:focus {
-  outline: none;
-  border-color: #2563eb;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
-}
-
-.btn-primary {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  background-color: #2563eb;
-  color: #fff;
-  border: none;
-  border-radius: 999px;
-  padding: 10px 20px;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s;
-  box-shadow: 0 4px 6px -1px rgba(37, 99, 235, 0.2);
-}
-
-.btn-primary:hover:not(:disabled) {
-  background-color: #1d4ed8;
-  transform: translateY(-1px);
-}
-
-.btn-primary:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
-}
-
-/* 列表卡片样式 */
-.list {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
-  gap: 20px;
-}
-
-.card {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  border-radius: 16px;
-  padding: 24px;
-  transition: all 0.3s ease;
-  cursor: pointer;
-}
-
-.card:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 12px 24px -8px rgba(15, 23, 42, 0.1);
-  border-color: #cbd5e1;
-}
-
-.title-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 16px;
-  margin-bottom: 20px;
-}
-
-.title-row h3 {
-  font-size: 17px;
-  font-weight: 700;
-  color: #1e293b;
-  margin: 0;
-  line-height: 1.4;
-  flex: 1;
-}
-
-.status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  border-radius: 999px;
-  font-size: 13px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.status-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-}
-
-.status[data-status='0'] { background-color: #ecfdf5; color: #059669; }
-.status[data-status='0'] .status-dot { background-color: #059669; }
-.status[data-status='1'] { background-color: #fefce8; color: #ca8a04; }
-.status[data-status='1'] .status-dot { background-color: #ca8a04; }
-.status[data-status='2'] { background-color: #eff6ff; color: #2563eb; }
-.status[data-status='2'] .status-dot { background-color: #2563eb; }
-.status[data-status='3'] { background-color: #fef2f2; color: #dc2626; }
-.status[data-status='3'] .status-dot { background-color: #dc2626; }
-
-.meta-data {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding-top: 16px;
-  border-top: 1px dashed #e2e8f0;
-}
-
-.meta-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 13px;
-}
-
-.meta-label {
-  color: #64748b;
-  font-weight: 500;
-}
-
-.meta-value {
-  color: #334155;
-  font-family: ui-monospace, SFMono-Regular, monospace;
-  background: #f1f5f9;
-  padding: 4px 8px;
-  border-radius: 6px;
-  font-weight: 500;
-}
+.meta-data { margin-top: auto; display: flex; flex-direction: column; gap: 10px; padding-top: 16px; border-top: 1px dashed #e2e8f0; }
+.meta-item { display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
+.meta-label { color: #64748b; font-weight: 500; }
+.meta-value { color: #334155; font-family: ui-monospace, SFMono-Regular, monospace; background: #f1f5f9; padding: 4px 6px; border-radius: 6px; font-weight: 500; }
 .meta-value.time { font-family: inherit; }
 
-/* 状态容器 (加载中/空数据) */
-.state-container {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 64px 20px;
-  background: #ffffff;
-  border-radius: 16px;
-  border: 1px dashed #cbd5e1;
-  color: #64748b;
-  gap: 16px;
-  font-size: 15px;
-}
+.state-container { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 64px 20px; background: #ffffff; border-radius: 16px; border: 1px dashed #cbd5e1; color: #64748b; gap: 16px; font-size: 15px; }
+.spinner { width: 28px; height: 28px; border: 3px solid #e2e8f0; border-top-color: #2563eb; border-radius: 50%; animation: spin 1s linear infinite; }
 
-.spinner {
-  width: 28px;
-  height: 28px;
-  border: 3px solid #e2e8f0;
-  border-top-color: #2563eb;
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-}
+.pagination { margin-top: 32px; display: flex; align-items: center; justify-content: center; gap: 16px; }
+.page-btn { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px 16px; font-size: 14px; font-weight: 500; color: #334155; cursor: pointer; transition: all 0.2s; }
+.page-btn:hover:not(:disabled) { border-color: #2563eb; color: #2563eb; }
+.page-btn:disabled { opacity: 0.5; cursor: not-allowed; background: #f8fafc; }
+.page-info { font-size: 14px; color: #64748b; } .page-info strong { color: #0f172a; }
 
-/* 分页 */
-.pagination {
-  margin-top: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 16px;
-}
+.modal-backdrop { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.4); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 100; }
+.modal { width: 560px; max-width: 90vw; background: #ffffff; border-radius: 20px; padding: 28px; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1); animation: modalSlideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
+@keyframes modalSlideUp { from { opacity: 0; transform: translateY(20px) scale(0.95); } to { opacity: 1; transform: translateY(0) scale(1); } }
 
-.page-btn {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  padding: 8px 16px;
-  font-size: 14px;
-  font-weight: 500;
-  color: #334155;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.page-btn:hover:not(:disabled) {
-  border-color: #2563eb;
-  color: #2563eb;
-}
-
-.page-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-  background: #f8fafc;
-}
-
-.page-info {
-  font-size: 14px;
-  color: #64748b;
-}
-.page-info strong { color: #0f172a; }
-
-/* Modal 弹窗 */
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(15, 23, 42, 0.4);
-  backdrop-filter: blur(4px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 100;
-}
-
-.modal {
-  width: 560px;
-  max-width: 90vw;
-  background: #ffffff;
-  border-radius: 20px;
-  padding: 28px;
-  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
-  animation: modalSlideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-@keyframes modalSlideUp {
-  from { opacity: 0; transform: translateY(20px) scale(0.95); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
-}
-
-.modal-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.modal-header h3 {
-  font-size: 20px;
-  font-weight: 700;
-  color: #0f172a;
-  margin: 0;
-}
-
-.close-btn {
-  background: transparent;
-  border: none;
-  font-size: 24px;
-  color: #94a3b8;
-  cursor: pointer;
-  transition: color 0.2s;
-}
-.close-btn:hover { color: #0f172a; }
-
-.hint {
-  font-size: 13px;
-  color: #64748b;
-  margin: 8px 0 20px 0;
-}
-
-.form-content {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.field-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-}
-
-.field label {
-  font-size: 14px;
-  font-weight: 600;
-  color: #334155;
-}
-
+.modal-header { display: flex; justify-content: space-between; align-items: center; }
+.modal-header h3 { font-size: 20px; font-weight: 700; color: #0f172a; margin: 0; }
+.close-btn { background: transparent; border: none; font-size: 24px; color: #94a3b8; cursor: pointer; transition: color 0.2s; } .close-btn:hover { color: #0f172a; }
+.hint { font-size: 13px; color: #64748b; margin: 8px 0 20px 0; }
+.form-content { display: flex; flex-direction: column; gap: 16px; }
+.field { display: flex; flex-direction: column; gap: 8px; }
+.field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.field label { font-size: 14px; font-weight: 600; color: #334155; }
 .required { color: #ef4444; }
+input, textarea, select { width: 100%; border-radius: 8px; border: 1px solid #cbd5e1; padding: 10px 12px; font-size: 14px; color: #0f172a; transition: all 0.2s; background: #f8fafc; font-family: inherit; }
+input:focus, textarea:focus, select:focus { outline: none; border-color: #2563eb; background: #ffffff; box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1); }
 
-input, textarea, select {
-  width: 100%;
-  border-radius: 8px;
-  border: 1px solid #cbd5e1;
-  padding: 10px 12px;
-  font-size: 14px;
-  color: #0f172a;
-  transition: all 0.2s;
-  background: #f8fafc;
-  font-family: inherit;
-}
-
-input:focus, textarea:focus, select:focus {
-  outline: none;
-  border-color: #2563eb;
-  background: #ffffff;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
-}
-
-.file-upload {
-  position: relative;
-  border: 1px dashed #cbd5e1;
-  border-radius: 8px;
-  background: #f8fafc;
-  padding: 16px;
-  text-align: center;
-  transition: all 0.2s;
-}
+.file-upload { position: relative; border: 1px dashed #cbd5e1; border-radius: 8px; background: #f8fafc; padding: 16px; text-align: center; transition: all 0.2s; }
 .file-upload:hover { border-color: #2563eb; background: #eff6ff; }
-
-.file-input {
-  position: absolute;
-  inset: 0;
-  opacity: 0;
-  cursor: pointer;
-  width: 100%;
-}
-
-.file-placeholder {
-  font-size: 13px;
-  color: #64748b;
-  pointer-events: none;
-}
+.file-input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; }
+.file-placeholder { font-size: 13px; color: #64748b; pointer-events: none; }
 .file-selected { color: #2563eb; font-weight: 500; }
 
-.error-msg {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 10px 12px;
-  background: #fef2f2;
-  border: 1px solid #fecaca;
-  color: #dc2626;
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.actions {
-  margin-top: 24px;
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-}
-
-.btn-ghost {
-  padding: 10px 20px;
-  border-radius: 999px;
-  border: 1px solid transparent;
-  background: transparent;
-  color: #64748b;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s;
-}
+.error-msg { display: flex; align-items: center; gap: 6px; padding: 10px 12px; background: #fef2f2; border: 1px solid #fecaca; color: #dc2626; border-radius: 8px; font-size: 13px; font-weight: 500; }
+.actions { margin-top: 24px; display: flex; justify-content: flex-end; gap: 12px; }
+.btn-ghost { padding: 10px 20px; border-radius: 999px; border: 1px solid transparent; background: transparent; color: #64748b; font-weight: 600; cursor: pointer; transition: all 0.2s; }
 .btn-ghost:hover { background: #f1f5f9; color: #0f172a; }
 
-.spinner-small {
-  width: 14px; height: 14px;
-  border: 2px solid #ffffff;
-  border-top-color: transparent;
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
-
-/* Vue 动画过渡 */
+.spinner-small { width: 14px; height: 14px; border: 2px solid #ffffff; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite; }
 .fade-enter-active, .fade-leave-active { transition: opacity 0.2s; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
 </style>
