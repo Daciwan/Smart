@@ -1,17 +1,18 @@
 <script setup lang="ts">
 import { RouterView, RouterLink } from 'vue-router';
 import { useWalletStore } from './stores/wallet';
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { ethers } from 'ethers';
 import { GOVERNOR_CONTRACT_ADDRESS, RPC_HTTP_URL } from './config';
 
 const wallet = useWalletStore();
 
-// 合约地址与 ABI（仅需 owner 查询）
+// 合约地址与 ABI
 const CONTRACT_ADDRESS = GOVERNOR_CONTRACT_ADDRESS;
 const CONTRACT_ABI = ['function owner() view returns (address)'];
 
 const contractOwner = ref<string | null>(null);
+const isCertified = ref(false); // 认证状态
 
 const shortAddress = computed(() => {
   if (!wallet.address) return '';
@@ -34,6 +35,32 @@ async function loadContractOwner() {
   }
 }
 
+// 检查是否已在链下完成身份认证
+async function checkAuthStatus() {
+  if (!wallet.address) {
+    isCertified.value = false;
+    return;
+  }
+  try {
+    const resp = await fetch('http://127.0.0.1:8080/api/identity/me', {
+      headers: { 'X-Wallet-Addr': wallet.address }
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      isCertified.value = data.authStatus === 1; // 1 表示审核通过
+    } else {
+      isCertified.value = false;
+    }
+  } catch (err) {
+    isCertified.value = false;
+  }
+}
+
+// 监听钱包变动自动查认证
+watch(() => wallet.address, () => {
+  checkAuthStatus();
+});
+
 async function handleConnect() {
   try {
     await wallet.connect();
@@ -50,10 +77,9 @@ function handleDisconnect() {
 }
 
 onMounted(async () => {
-  // 刷新后自动恢复钱包登录态（不会触发钱包弹窗）
   await wallet.restoreSession();
-  // 提前从本地节点读取合约 owner，避免每次连接都额外等待
   loadContractOwner();
+  checkAuthStatus();
 });
 </script>
 
@@ -67,7 +93,10 @@ onMounted(async () => {
         </div>
         <nav class="nav-links">
           <RouterLink to="/">首页</RouterLink>
-          <RouterLink to="/identity">身份认证</RouterLink>
+          
+          <RouterLink v-if="!isCertified" to="/identity">身份认证</RouterLink>
+          <RouterLink v-else to="/user-center">个人中心</RouterLink>
+          
           <RouterLink to="/proposals">提案与投票</RouterLink>
           <RouterLink v-if="isAdmin" to="/admin">管理后台</RouterLink>
         </nav>

@@ -72,7 +72,7 @@ func main() {
 		// 身份认证相关
 		api.POST("/identity/register", handlers.RegisterIdentity)
 		api.GET("/identity/me", handlers.GetCurrentIdentity)
-
+		api.GET("/user/votes", handlers.GetUserVotes)//获取当前用户投票记录
 		// 管理员审核相关
 		admin := api.Group("/admin")
 		{

@@ -32,6 +32,11 @@ const routes: RouteRecordRaw[] = [
     name: 'admin',
     component: AdminPage,
   },
+  {
+  path: '/user-center',
+  name: 'user-center',
+  component: () => import('../views/UserCenterPage.vue')
+}
 ];
 
 const router = createRouter({

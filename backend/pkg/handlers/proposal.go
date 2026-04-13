@@ -349,3 +349,33 @@ func DeleteProposal(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"message": "proposal deleted successfully"})
 }
+
+// GetUserVotes 获取特定用户的投票历史
+func GetUserVotes(c *gin.Context) {
+	addr := strings.ToLower(c.GetHeader("X-Wallet-Addr"))
+	if addr == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing wallet address"})
+		return
+	}
+
+	type VoteResult struct {
+		models.VoteRecord
+		PropTitle string `json:"propTitle"`
+	}
+
+	var results []VoteResult
+	// 关联查询提案标题
+	err := db.DB.Table("vote_records").
+		Select("vote_records.*, proposals.prop_title").
+		Joins("left join proposals on vote_records.prop_id = proposals.prop_id").
+		Where("vote_records.voter_addr = ?", addr).
+		Order("vote_records.vote_time desc").
+		Scan(&results).Error
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch votes"})
+		return
+	}
+
+	c.JSON(http.StatusOK, results)
+}
