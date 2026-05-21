@@ -14,7 +14,11 @@ const currentPage = ref(1);
 const pageSize = 5;
 
 async function loadData() {
-  if (!wallet.address) return;
+  if (!wallet?.address) {
+    loading.value=false;
+    votes.value=[];
+    return;
+  }
   loading.value = true;
   try {
     const idResp = await fetch('http://127.0.0.1:8080/api/identity/me', {
@@ -32,6 +36,15 @@ async function loadData() {
     loading.value = false;
   }
 }
+
+watch(
+  () => wallet?.address, 
+  (newAddress) => {
+    // 只要地址发生变化（包含刚进入页面的首次获取），就触发数据加载
+    loadData();
+  },
+  { immediate: true } // 替代 onMounted，组件初始化时立即执行一次
+);
 
 // 1. 基础过滤逻辑
 const filteredVotes = computed(() => {
@@ -116,21 +129,21 @@ onMounted(loadData);
         </div>
       </div>
 
-      <div v-if="loading" class="loading-state">
+      <div v-if="loading && pagedVotes.length !== 0" class="loading-state">
         <div class="pulse-loader"></div>
         <p>正在同步链上治理记录...</p>
       </div>
 
       <div v-else-if="pagedVotes.length === 0" class="empty-state">
         <div class="empty-icon">📂</div>
-        <p>在该筛选条件下暂无投票记录</p>
+        <p>暂无投票记录</p>
       </div>
       
       <div v-else class="vote-container">
         <div class="vote-grid">
           <div v-for="v in pagedVotes" :key="v.id" class="modern-vote-card">
             <div class="card-top">
-              <h4 class="prop-title">{{ v.propTitle || '载入中...' }}</h4>
+              <h4 class="prop-title">{{ v.propTitle || '提案已被删除' }}</h4>
               <div class="choice-indicator" :class="'c-' + v.voteChoice">
                 {{ getChoiceLabel(v.voteChoice) }}
               </div>
